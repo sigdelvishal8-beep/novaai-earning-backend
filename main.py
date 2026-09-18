@@ -265,6 +265,50 @@ def status():
     }
 
 
+
+@app.post("/users")
+def create_legacy_user(data: dict):
+    name = str(data.get("name", "")).strip()
+
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Name is required")
+
+    user_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            "INSERT INTO users (id, name, email, password_hash, balance, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                name,
+                f"{user_id}@novaai.local",
+                generate_password_hash(str(uuid.uuid4())),
+                0.0,
+                now,
+            ),
+        )
+
+        conn.commit()
+
+        return {
+            "id": user_id,
+            "user_id": user_id,
+            "name": name,
+            "balance": 0.0,
+            "currency": CURRENCY,
+        }
+
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail="Account creation failed")
+    finally:
+        conn.close()
+
 @app.post("/auth/register")
 def register(data: RegisterRequest):
     name = data.name.strip()
