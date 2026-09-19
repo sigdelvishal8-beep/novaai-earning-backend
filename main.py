@@ -166,7 +166,9 @@ class CampaignRequest(BaseModel):
 
 
 class CompleteTaskRequest(BaseModel):
-    task_id: str
+    task_id: str | None = None
+    campaign_id: str | None = None
+    user_id: str | None = None
 
 
 class CreditRequest(BaseModel):
@@ -295,12 +297,26 @@ def create_legacy_user(data: dict):
 
         conn.commit()
 
+        user = conn.execute(
+            """
+            SELECT id, name, email, balance, is_admin, created_at
+            FROM users
+            WHERE id=?
+            """,
+            (user_id,)
+        ).fetchone()
+
+        token = make_token(dict(user))
+
         return {
+            "success": True,
             "id": user_id,
             "user_id": user_id,
             "name": name,
             "balance": 0.0,
             "currency": CURRENCY,
+            "token": token,
+            "user": dict(user)
         }
 
     except sqlite3.IntegrityError:
@@ -578,19 +594,43 @@ def complete_task(
     try:
         conn.execute("BEGIN IMMEDIATE")
 
-        task = conn.execute(
-            """
-            SELECT id, campaign_id, user_id, reward, status
-            FROM tasks
-            WHERE id=?
-            """,
-            (data.task_id,)
-        ).fetchone()
+        task = None
+        selected_task_id = None
+
+        if data.task_id:
+            selected_task_id = str(data.task_id)
+
+            task = conn.execute(
+                """
+                SELECT id, campaign_id, user_id, reward, status
+                FROM tasks
+                WHERE id=?
+                """,
+                (selected_task_id,)
+            ).fetchone()
+
+        elif data.campaign_id:
+            campaign_id = str(data.campaign_id)
+
+            task = conn.execute(
+                """
+                SELECT id, campaign_id, user_id, reward, status
+                FROM tasks
+                WHERE campaign_id=?
+                  AND status='available'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (campaign_id,)
+            ).fetchone()
+
+            if task:
+                selected_task_id = str(task["id"])
 
         if not task:
             raise HTTPException(
                 status_code=404,
-                detail="Task not found"
+                detail="No available task found"
             )
 
         if task["user_id"] is not None and str(task["user_id"]) != str(user["id"]):
@@ -635,7 +675,7 @@ def complete_task(
             SET status='completed', user_id=?
             WHERE id=?
             """,
-            (str(user["id"]), data.task_id)
+            (str(user["id"]), selected_task_id)
         )
 
         conn.execute(
